@@ -25,6 +25,7 @@ import {
 } from "@/lib/learning-types";
 import { QuizCard } from "@/components/QuizCard";
 import { KnowledgeMap } from "@/components/KnowledgeMap";
+import { TutorChat } from "@/components/TutorChat";
 
 type Phase = "setup" | "diagnostic" | "map" | "lesson" | "checkpoint" | "explain" | "done";
 type Coach = { verdict: string; feedback: string; nextStep: string; score: number };
@@ -188,6 +189,15 @@ export function LearningApp() {
     </div>
   ) : null;
 
+  const chatContext = curriculum
+    ? `Concepts and mastery: ${concepts
+        .map((c) => `${c.name} ${Math.round((knowledge[c.id]?.mastery ?? 0) * 100)}%`)
+        .join(", ")}. Known misconceptions: ${
+        Object.values(knowledge).flatMap((k) => k.misconceptions).join("; ") || "none"
+      }.`
+    : "";
+  const chat = <TutorChat topic={curriculum?.title || topic} context={chatContext} />;
+
   if (phase === "setup") {
     return (
       <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col justify-center px-5 py-16">
@@ -263,6 +273,7 @@ export function LearningApp() {
           {busy && <p className="mt-4 text-center text-sm text-muted-foreground">{busy}</p>}
           {Err}
         </div>
+        {chat}
       </main>
     );
   }
@@ -291,6 +302,7 @@ export function LearningApp() {
           ) : null}
         </div>
         <KnowledgeMap concepts={concepts} knowledge={knowledge} activeId={q?.conceptId} />
+        {chat}
       </Shell>
     );
   }
@@ -364,6 +376,7 @@ export function LearningApp() {
           {Err}
         </div>
         <KnowledgeMap concepts={concepts} knowledge={knowledge} activeId={upNext?.id} />
+        {chat}
       </Shell>
     );
   }
@@ -487,6 +500,7 @@ export function LearningApp() {
           {phase !== "explain" && Err}
         </div>
         <KnowledgeMap concepts={concepts} knowledge={knowledge} activeId={lesson.conceptId} />
+        {chat}
       </Shell>
     );
   }
@@ -505,7 +519,7 @@ function Shell({
   onReset: () => void;
   children: React.ReactNode;
 }) {
-  const [main, sidebar] = children as React.ReactNode[];
+  const [main, sidebar, chat] = children as React.ReactNode[];
   return (
     <main className="mx-auto w-full max-w-6xl px-5 py-10">
       <header className="flex flex-wrap items-start justify-between gap-4">
@@ -528,6 +542,7 @@ function Shell({
         <div>{main}</div>
         {sidebar}
       </div>
+      {chat}
     </main>
   );
 }

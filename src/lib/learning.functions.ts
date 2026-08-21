@@ -1,22 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { generateJson, obj, arr, str, num } from "./ai-gateway.server";
+import { generateJson, generateText, obj, arr, str, num } from "./ai-gateway.server";
+import { TUTOR, questionSchema } from "./learning-prompts.server";
 import type { Curriculum, Lesson } from "./learning-types";
-
-const questionSchema = obj({
-  conceptId: str("id of the concept this question tests"),
-  prompt: str(),
-  options: arr(str()),
-  correctIndex: num("0-based index of the correct option"),
-  explanation: str("why the correct answer is correct, 1-3 sentences"),
-  difficulty: num("1 = recall, 2 = application, 3 = transfer"),
-  misconceptions: arr(str("for each option, the misconception it reveals; empty string for the correct option")),
-});
-
-const TUTOR = `You are an expert adaptive tutor and learning scientist.
-You design instruction using retrieval practice, worked examples, concrete analogies and misconception diagnosis.
-Write in clear, warm, concise prose. Never be condescending. Never pad.
-Every multiple-choice item has exactly 4 options and plausible distractors that map to real misconceptions.`;
 
 export const buildCurriculum = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) =>
@@ -124,4 +110,86 @@ Reference answer: ${data.correctAnswer}
 Learner's answer in their own words: """${data.learnerAnswer}"""
 Grade it and coach them.`,
     });
+  });
+
+/** Free-form tutor chat, grounded in the learner's topic, mastery state and uploaded notes. */
+export const askTutor = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        topic: z.string().max(200).default(""),
+        context: z.string().max(6000).default(""),
+        notes: z.string().max(20000).default(""),
+        history: z
+          .array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(6000) }))
+          .max(24)
+          .default([]),
+        question: z.string().min(1).max(4000),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const preface = [
+      data.topic ? `The learner is studying: ${data.topic}.` : "",
+      data.context ? `Their current knowledge state: ${data.context}` : "",
+      data.notes ? `Their uploaded notes (extracted text):\n"""${data.notes.slice(0, 12000)}"""` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    const text = await generateText({
+      system: `${TUTOR}
+Answer questions directly and concisely in markdown. Prefer a short direct answer first, then a brief expansion.
+Use the learner's notes when they are relevant, and say so. If you are unsure, say so plainly.`,
+      effort: "low",
+      input: [
+        ...(preface ? [{ role: "user" as const, content: [{ type: "input_text" as const, text: preface }] }] : []),
+        ...data.history.map((m) => ({
+          role: m.role,
+          content: [{ type: "input_text" as const, text: m.content }],
+        })),
+        { role: "user" as const, content: [{ type: "input_text" as const, text: data.question }] },
+      ],
+    });
+
+    return { answer: text };
+  });
+
+/** OCR + summarise uploaded note images (data URLs). */
+export const summarizeNotes = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        topic: z.string().max(200).default(""),
+        images: z.array(z.string().startsWith("data:image/")).min(1).max(4),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const text = await generateText({
+      system: `${TUTOR}
+You read photographed or scanned study notes, transcribe them accurately, and turn them into useful study material.
+Never invent content that is not visible in the images.`,
+      effort: "medium",
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: `${data.topic ? `Topic context: ${data.topic}.\n` : ""}Read these note images. Reply in markdown with exactly these sections:
+## Transcript
+The text you can read, cleaned up.
+## Summary
+5-8 bullet points of the key ideas.
+## Gaps & questions
+2-4 things the notes leave unclear or omit, phrased as study questions.`,
+            },
+            ...data.images.map((image_url) => ({ type: "input_image" as const, image_url })),
+          ],
+        },
+      ],
+    });
+
+    return { notes: text };
   });
